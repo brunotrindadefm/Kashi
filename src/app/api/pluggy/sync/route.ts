@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolvePluggyApiKey } from '@/app/api/pluggy/token/route';
 
 interface PluggyAccount {
   id: string;
@@ -19,9 +18,49 @@ interface PluggyTransaction {
 }
 
 /**
+ * Resolves a short-lived Pluggy X-API-KEY on the server using
+ * PLUGGY_CLIENT_ID + PLUGGY_CLIENT_SECRET (or PLUGGY_API_KEY).
+ * Never exposes credentials to the client and stores zero state on the server.
+ */
+async function resolvePluggyApiKey(): Promise<string | null> {
+  const clientId = process.env.PLUGGY_CLIENT_ID;
+  const clientSecret = process.env.PLUGGY_CLIENT_SECRET;
+  const directApiKey = process.env.PLUGGY_API_KEY;
+
+  if (
+    clientId &&
+    clientSecret &&
+    clientId !== 'your-pluggy-client-id' &&
+    clientSecret !== 'your-pluggy-client-secret'
+  ) {
+    try {
+      const authRes = await fetch('https://api.pluggy.ai/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId, clientSecret }),
+        cache: 'no-store',
+      });
+      if (authRes.ok) {
+        const data = (await authRes.json()) as { apiKey?: string };
+        if (data.apiKey) return data.apiKey;
+      }
+    } catch {
+      // Fall through to directApiKey if auth call fails
+    }
+  }
+
+  if (directApiKey && directApiKey !== 'your-pluggy-api-key') {
+    return directApiKey;
+  }
+
+  return null;
+}
+
+/**
  * POST /api/pluggy/sync
- * Fetches real accounts and transactions from Pluggy Open Finance API
- * using the personal Meu Pluggy (meu.pluggy.ai) Item ID + .env.local credentials.
+ * Stateless on-demand proxy: requires the caller's personal Meu Pluggy UUID `itemId`
+ * (stored only in the user's device LocalStorage) and returns accounts + transactions
+ * without persisting anything on the server.
  */
 export async function POST(req: NextRequest) {
   const apiKey = await resolvePluggyApiKey();
@@ -30,7 +69,7 @@ export async function POST(req: NextRequest) {
       {
         ok: false,
         mode: 'unconfigured',
-        error: 'Credenciais da Pluggy não encontradas no .env.local.',
+        error: 'Credenciais da Pluggy não configuradas no ambiente.',
       },
       { status: 200 }
     );
@@ -38,15 +77,18 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = (await req.json().catch(() => ({}))) as { itemId?: string };
-    const itemId = body.itemId?.trim() || process.env.PLUGGY_ITEM_ID?.trim();
+    const itemId = body.itemId?.trim();
 
-    if (!itemId) {
+    // Require a valid UUID v4 Item ID from the client's LocalStorage
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!itemId || !uuidRegex.test(itemId)) {
       return NextResponse.json(
         {
           ok: false,
           mode: 'needs_item_id',
           error:
-            'Informe o Item ID da sua conexão gratuita do Meu Pluggy (meu.pluggy.ai) no botão Configurar do banco.',
+            'Clique em Configurar no card do banco e cole o Item ID válido (UUID) da sua conexão do Meu Pluggy.',
         },
         { status: 200 }
       );
