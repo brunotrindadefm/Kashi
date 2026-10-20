@@ -1,14 +1,18 @@
 -- ============================================================================
--- Kashi — Smart Personal Finance & Open Finance Database Schema (Supabase)
--- Includes Row Level Security (RLS) per user and automatic default categories
+-- Kashi — Single-Owner Personal Finance Database Schema (Supabase PostgreSQL)
+-- Security Architecture:
+--   1. AES-256 Encryption at rest + pgcrypto extension enabled
+--   2. Strict Row-Level Security (RLS) restricted to `authenticated` role
+--   3. Single-Owner isolation (`auth.uid() = user_id`)
 -- ============================================================================
 
 create extension if not exists "uuid-ossp";
+create extension if not exists "pgcrypto";
 
 -- 1. User Profiles Table
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  name text not null default 'Usuário',
+  name text not null default 'Administrador',
   email text not null,
   dark_mode boolean not null default false,
   auto_classify boolean not null default true,
@@ -18,17 +22,24 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "Users can view their own profile" on public.profiles;
 create policy "Users can view their own profile"
   on public.profiles for select
+  to authenticated
   using (auth.uid() = id);
 
+drop policy if exists "Users can insert their own profile" on public.profiles;
 create policy "Users can insert their own profile"
   on public.profiles for insert
+  to authenticated
   with check (auth.uid() = id);
 
+drop policy if exists "Users can update their own profile" on public.profiles;
 create policy "Users can update their own profile"
   on public.profiles for update
-  using (auth.uid() = id);
+  to authenticated
+  using (auth.uid() = id)
+  with check (auth.uid() = id);
 
 -- 2. Categories Table
 create table if not exists public.categories (
@@ -44,12 +55,14 @@ create table if not exists public.categories (
 
 alter table public.categories enable row level security;
 
+drop policy if exists "Users can manage their own categories" on public.categories;
 create policy "Users can manage their own categories"
   on public.categories for all
+  to authenticated
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
--- 3. Connected Bank Accounts (Open Finance / Pluggy)
+-- 3. Connected Bank Accounts (Open Finance / Meu Pluggy)
 create table if not exists public.bank_accounts (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -61,13 +74,16 @@ create table if not exists public.bank_accounts (
   connected boolean not null default true,
   pluggy_item_id text,
   last_sync_at timestamptz,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique(user_id, institution_id)
 );
 
 alter table public.bank_accounts enable row level security;
 
+drop policy if exists "Users can manage their own bank accounts" on public.bank_accounts;
 create policy "Users can manage their own bank accounts"
   on public.bank_accounts for all
+  to authenticated
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
@@ -79,8 +95,8 @@ create table if not exists public.transactions (
   amount numeric(14, 2) not null check (amount >= 0),
   type text not null check (type in ('expense', 'income')),
   status text not null check (status in ('completed', 'upcoming')),
-  category_id uuid references public.categories(id) on delete set null,
-  suggested_category_id uuid references public.categories(id) on delete set null,
+  category_id text,
+  suggested_category_id text,
   pending_category_confirmation boolean not null default false,
   source text not null default 'manual' check (source in ('manual', 'bank', 'import')),
   bank_id text,
@@ -91,8 +107,10 @@ create table if not exists public.transactions (
 
 alter table public.transactions enable row level security;
 
+drop policy if exists "Users can manage their own transactions" on public.transactions;
 create policy "Users can manage their own transactions"
   on public.transactions for all
+  to authenticated
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
@@ -101,7 +119,7 @@ create table if not exists public.classification_rules (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid not null references auth.users(id) on delete cascade,
   keyword text not null,
-  category_id uuid not null references public.categories(id) on delete cascade,
+  category_id text not null,
   confidence numeric(4, 3) not null default 1.0,
   hit_count integer not null default 1,
   updated_at timestamptz not null default now(),
@@ -110,12 +128,14 @@ create table if not exists public.classification_rules (
 
 alter table public.classification_rules enable row level security;
 
+drop policy if exists "Users can manage their own classification rules" on public.classification_rules;
 create policy "Users can manage their own classification rules"
   on public.classification_rules for all
+  to authenticated
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
--- 6. Trigger to create Profile and Default Categories on Auth Signup
+-- 6. Trigger to seed Profile and Default Categories when the Owner User is created
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql

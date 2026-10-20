@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { isSupabaseConfigured } from '@/lib/supabase';
 
 interface PluggyAccount {
   id: string;
@@ -58,11 +60,58 @@ async function resolvePluggyApiKey(): Promise<string | null> {
 
 /**
  * POST /api/pluggy/sync
- * Stateless on-demand proxy: requires the caller's personal Meu Pluggy UUID `itemId`
- * (stored only in the user's device LocalStorage) and returns accounts + transactions
- * without persisting anything on the server.
+ * Protected by Supabase JWT verification when Supabase is configured,
+ * and requires the caller's personal Meu Pluggy UUID `itemId`.
  */
 export async function POST(req: NextRequest) {
+  // 1. Verify Supabase JWT session if Supabase is configured
+  if (isSupabaseConfigured) {
+    const authHeader = req.headers.get('authorization');
+    const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+    if (!token) {
+      return NextResponse.json(
+        {
+          ok: false,
+          mode: 'unauthorized',
+          error: 'Sessão não autenticada. Faça login no Kashi.',
+        },
+        { status: 401 }
+      );
+    }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) {
+      return NextResponse.json(
+        {
+          ok: false,
+          mode: 'unauthorized',
+          error: 'Token de sessão inválido ou expirado.',
+        },
+        { status: 401 }
+      );
+    }
+
+    const ownerEmail = process.env.NEXT_PUBLIC_OWNER_EMAIL?.trim().toLowerCase();
+    if (
+      ownerEmail &&
+      ownerEmail !== 'your-owner-email@example.com' &&
+      data.user.email?.toLowerCase() !== ownerEmail
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          mode: 'forbidden',
+          error: 'Acesso restrito exclusivamente ao proprietário do Kashi.',
+        },
+        { status: 403 }
+      );
+    }
+  }
+
   const apiKey = await resolvePluggyApiKey();
   if (!apiKey) {
     return NextResponse.json(
@@ -79,7 +128,6 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as { itemId?: string };
     const itemId = body.itemId?.trim();
 
-    // Require a valid UUID v4 Item ID from the client's LocalStorage
     const uuidRegex =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!itemId || !uuidRegex.test(itemId)) {

@@ -20,7 +20,7 @@ export default function LoginPage() {
       const result = await login(email, password);
       if (!result.ok) {
         notify(
-          'Não foi possível entrar',
+          'Acesso negado',
           result.error || 'Verifique suas credenciais.',
           'error'
         );
@@ -41,14 +41,14 @@ export default function LoginPage() {
             K
           </div>
           <h1 className="mt-4 text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-            Entrar no Kashi
+            Kashi
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Gestão financeira inteligente com Open Finance
+            Acesso pessoal exclusivo e criptografado
           </p>
         </div>
 
-        {/* Login Form Card */}
+        {/* Login Form Card (Single-Owner Mode — Public Signups Disabled) */}
         <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-6 sm:p-7 shadow-soft">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -56,7 +56,7 @@ export default function LoginPage() {
                 htmlFor="login-email"
                 className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
               >
-                E-mail
+                E-mail do Proprietário
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -108,27 +108,21 @@ export default function LoginPage() {
               disabled={isSubmitting}
               className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-glow transition-all"
             >
-              {isSubmitting ? 'Entrando...' : 'Entrar na minha conta'}
+              {isSubmitting ? 'Autenticando...' : 'Entrar no Kashi'}
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
           <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800 text-center">
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Ainda não tem uma conta no Kashi?{' '}
-              <Link
-                href="/register"
-                className="font-bold text-emerald-600 dark:text-emerald-400 hover:underline"
-              >
-                Criar conta
-              </Link>
+            <p className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
+              Ambiente privado de usuário único • Cadastros públicos desativados
             </p>
           </div>
         </div>
 
         <div className="mt-5 flex items-center justify-center gap-1.5 text-xs text-slate-400">
           <ShieldCheck className="w-4 h-4 text-emerald-500" />
-          <span>Criptografia de ponta a ponta & compatível com Open Finance</span>
+          <span>Protegido por Supabase Auth + PostgreSQL RLS (AES-256)</span>
         </div>
       </div>
     </div>

@@ -400,7 +400,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [appendParsedNotificationItem, notify]
   );
 
-  // Authentication Actions
+  // Authentication Actions (Single-Owner Mode — Public Signups Disabled)
   const login = useCallback(
     async (
       email: string,
@@ -409,6 +409,18 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       const normalizedEmail = email.trim().toLowerCase();
       if (!normalizedEmail || !password) {
         return { ok: false, error: 'Preencha seu e-mail e senha.' };
+      }
+
+      const configuredOwnerEmail = process.env.NEXT_PUBLIC_OWNER_EMAIL?.trim().toLowerCase();
+      if (
+        configuredOwnerEmail &&
+        configuredOwnerEmail !== 'your-owner-email@example.com' &&
+        normalizedEmail !== configuredOwnerEmail
+      ) {
+        return {
+          ok: false,
+          error: 'Acesso restrito exclusivamente ao proprietário do Kashi.',
+        };
       }
 
       const supabase = getSupabaseClient();
@@ -467,18 +479,26 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         return { ok: true };
       }
 
+      // Single-Owner Lock in local mode: only allow bootstrapping if 0 accounts exist
+      if (users.length >= 1) {
+        return {
+          ok: false,
+          error:
+            'Acesso restrito: este dispositivo já possui a conta única do proprietário configurada.',
+        };
+      }
+
       const inferredName = normalizedEmail
         .split('@')[0]
         .replace(/[._-]/g, ' ')
         .replace(/\b\w/g, (l) => l.toUpperCase());
       const newUser: StoredAccountCredentials = {
         id: `user-${Date.now()}`,
-        name: inferredName || 'Usuário',
+        name: inferredName || 'Proprietário',
         email: normalizedEmail,
         passwordHash: password,
       };
-      const updatedUsers = [...users, newUser];
-      localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(updatedUsers));
+      localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify([newUser]));
       const freshStore = createEmptyUserStore(newUser);
       localStorage.setItem(getStoreKeyForUser(newUser.id), JSON.stringify(freshStore));
       localStorage.setItem(
@@ -491,101 +511,22 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       );
       applyStoreToState(freshStore);
       setIsAuthenticated(true);
-      notify('Acesso liberado!', `Bem-vindo ao Kashi, ${newUser.name}.`);
+      notify('Acesso do Proprietário configurado!', `Bem-vindo ao Kashi, ${newUser.name}.`);
       return { ok: true };
     },
     [applyStoreToState, notify]
   );
 
-  const register = useCallback(
-    async (
-      name: string,
-      email: string,
-      password: string
-    ): Promise<{ ok: boolean; error?: string }> => {
-      const normalizedEmail = email.trim().toLowerCase();
-      const trimmedName = name.trim();
-      if (!trimmedName || !normalizedEmail || password.length < 6) {
-        return {
-          ok: false,
-          error: 'Preencha nome, e-mail e uma senha de no mínimo 6 caracteres.',
-        };
-      }
-
-      const supabase = getSupabaseClient();
-      if (supabase && isSupabaseConfigured) {
-        const { data, error } = await supabase.auth.signUp({
-          email: normalizedEmail,
-          password,
-          options: { data: { name: trimmedName } },
-        });
-        if (error || !data.user) {
-          return {
-            ok: false,
-            error: error?.message || 'Não foi possível criar sua conta.',
-          };
-        }
-        const userObj = {
-          id: data.user.id,
-          name: trimmedName,
-          email: normalizedEmail,
-        };
-        const freshStore = createEmptyUserStore(userObj);
-        localStorage.setItem(
-          getStoreKeyForUser(userObj.id),
-          JSON.stringify(freshStore)
-        );
-        localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(userObj));
-        applyStoreToState(freshStore);
-        setIsAuthenticated(true);
-        notify('Conta criada com sucesso!', `Bem-vindo ao Kashi, ${trimmedName}!`);
-        return { ok: true };
-      }
-
-      const rawUsers = localStorage.getItem(STORAGE_USERS_KEY);
-      const users: StoredAccountCredentials[] = rawUsers
-        ? JSON.parse(rawUsers)
-        : [];
-      if (users.some((u) => u.email.toLowerCase() === normalizedEmail)) {
-        return {
-          ok: false,
-          error: 'Já existe uma conta cadastrada com este e-mail.',
-        };
-      }
-
-      const newUser: StoredAccountCredentials = {
-        id: `user-${Date.now()}`,
-        name: trimmedName,
-        email: normalizedEmail,
-        passwordHash: password,
-      };
-      localStorage.setItem(
-        STORAGE_USERS_KEY,
-        JSON.stringify([...users, newUser])
-      );
-      const freshStore = createEmptyUserStore(newUser);
-      localStorage.setItem(
-        getStoreKeyForUser(newUser.id),
-        JSON.stringify(freshStore)
-      );
-      localStorage.setItem(
-        STORAGE_SESSION_KEY,
-        JSON.stringify({
-          id: newUser.id,
-          name: newUser.name,
-          email: newUser.email,
-        })
-      );
-      applyStoreToState(freshStore);
-      setIsAuthenticated(true);
-      notify(
-        'Conta criada com sucesso!',
-        'Sua conta iniciou limpa e pronta para seus dados reais.'
-      );
-      return { ok: true };
-    },
-    [applyStoreToState, notify]
-  );
+  const register = useCallback(async (): Promise<{
+    ok: boolean;
+    error?: string;
+  }> => {
+    return {
+      ok: false,
+      error:
+        'Cadastros públicos estão desativados. O Kashi opera em modo proprietário único.',
+    };
+  }, []);
 
   const recoverPassword = useCallback(
     async (email: string): Promise<{ ok: boolean; error?: string }> => {
@@ -905,11 +846,27 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         )
       );
 
+      let authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      const supabase = getSupabaseClient();
+      if (supabase && isSupabaseConfigured) {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          authHeaders = {
+            ...authHeaders,
+            Authorization: `Bearer ${session.access_token}`,
+          };
+        }
+      }
+
       for (const bank of targetBanks) {
         try {
           const res = await fetch('/api/pluggy/sync', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders,
             body: JSON.stringify({ itemId: bank.pluggyItemId }),
           });
           const data = (await res.json()) as {
