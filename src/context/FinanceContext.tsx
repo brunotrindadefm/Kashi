@@ -92,9 +92,12 @@ interface FinanceContextValue {
   clearAllTransactions: () => void;
   addCategory: (input: NewCategoryInput) => void;
   deleteCategory: (categoryId: string) => void;
-  toggleBankConnection: (institutionId: BankInstitutionId) => void;
+  toggleBankConnection: (
+    institutionId: BankInstitutionId,
+    pluggyItemId?: string
+  ) => void;
   updateBankBalance: (institutionId: BankInstitutionId, balance: number) => void;
-  syncConnectedBanks: () => Promise<number>;
+  syncConnectedBanks: (specificInstitutionId?: BankInstitutionId) => Promise<number>;
   importStatementItems: (items: ParsedStatementItem[], bankId?: string) => number;
   ingestNotificationText: (rawText: string, appOrTitle?: string) => boolean;
   predictCategory: (description: string, type: TransactionType) => ClassificationMatch;
@@ -825,20 +828,23 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [categories, notify]
   );
 
-  // Bank Account Activation & Webhook Sync (100% Free — No paid aggregators)
+  // Bank Account Activation, Meu Pluggy (Free Personal Open Finance) & Webhook Sync
   const toggleBankConnection = useCallback(
-    (institutionId: BankInstitutionId) => {
+    (institutionId: BankInstitutionId, pluggyItemId?: string) => {
       let connectedNow = false;
       let bankLabel = '';
 
       setBanks((prev) =>
         prev.map((bank) => {
           if (bank.institutionId !== institutionId) return bank;
-          connectedNow = !bank.connected;
+          connectedNow = pluggyItemId ? true : !bank.connected;
           bankLabel = bank.institutionName;
           return {
             ...bank,
             connected: connectedNow,
+            pluggyItemId: connectedNow
+              ? pluggyItemId ?? bank.pluggyItemId
+              : undefined,
             balance: connectedNow ? bank.balance : 0,
             lastSyncAt: connectedNow ? new Date().toISOString() : undefined,
           };
@@ -848,7 +854,9 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       if (connectedNow) {
         notify(
           `${bankLabel} ativado!`,
-          'Use o Webhook de Notificação ou importe o CSV/OFX do app do banco.'
+          pluggyItemId
+            ? 'Item ID do Meu Pluggy salvo! Clique em Sincronizar para puxar seu extrato real.'
+            : 'Use o Meu Pluggy (meu.pluggy.ai), Webhook de Notificação ou CSV/OFX.'
         );
       } else {
         notify(
@@ -875,24 +883,138 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [notify]
   );
 
-  const syncConnectedBanks = useCallback(async (): Promise<number> => {
-    const webhookCount = await drainQueuedWebhookNotifications();
+  const syncConnectedBanks = useCallback(
+    async (specificInstitutionId?: BankInstitutionId): Promise<number> => {
+      const webhookCount = await drainQueuedWebhookNotifications();
 
-    if (webhookCount > 0) {
-      notify(
-        'Sincronização concluída!',
-        `${webhookCount} notificação(ões) bancária(s) importada(s) em tempo real.`
+      const targetBanks = banks.filter((b) =>
+        specificInstitutionId
+          ? b.institutionId === specificInstitutionId && b.connected
+          : b.connected
       );
-    } else {
-      notify(
-        'Tudo sincronizado!',
-        'Nenhuma nova notificação pendente na fila do Webhook no momento.',
-        'info'
-      );
-    }
 
-    return webhookCount;
-  }, [drainQueuedWebhookNotifications, notify]);
+      let totalImportedFromPluggy = 0;
+      let lastErrorMsg = '';
+
+      const existingSignatures = new Set(
+        transactions.map(
+          (tx) =>
+            `${tx.date}|${tx.amount.toFixed(2)}|${tx.description
+              .toLowerCase()
+              .trim()}`
+        )
+      );
+
+      for (const bank of targetBanks) {
+        try {
+          const res = await fetch('/api/pluggy/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemId: bank.pluggyItemId }),
+          });
+          const data = (await res.json()) as {
+            ok?: boolean;
+            totalBalance?: number;
+            transactions?: {
+              description: string;
+              amount: number;
+              type: 'expense' | 'income';
+              status: 'completed' | 'upcoming';
+              date: string;
+            }[];
+            error?: string;
+          };
+
+          if (!data.ok && data.error) {
+            lastErrorMsg = data.error;
+          }
+
+          if (data.ok && data.transactions) {
+            const uniquePluggyTxs = data.transactions.filter((t) => {
+              const sig = `${t.date}|${t.amount.toFixed(
+                2
+              )}|${t.description.toLowerCase().trim()}`;
+              if (existingSignatures.has(sig)) return false;
+              existingSignatures.add(sig);
+              return true;
+            });
+
+            const realTxs: Transaction[] = uniquePluggyTxs.map((t, idx) => {
+              const match = classifyTransaction(
+                t.description,
+                t.type,
+                categories,
+                profile.autoClassify ? rules : []
+              );
+              return {
+                id: `tx-pluggy-${bank.institutionId}-${Date.now()}-${idx}`,
+                description: t.description,
+                amount: t.amount,
+                type: t.type,
+                status: t.status,
+                categoryId: match.categoryId,
+                suggestedCategoryId: match.categoryId,
+                pendingCategoryConfirmation: t.status === 'completed',
+                source: 'bank',
+                bankId: bank.id,
+                bankName: bank.institutionName,
+                date: t.date,
+                createdAt: new Date().toISOString(),
+              };
+            });
+
+            if (realTxs.length > 0) {
+              setTransactions((prev) => [...realTxs, ...prev]);
+              totalImportedFromPluggy += realTxs.length;
+            }
+
+            if (typeof data.totalBalance === 'number') {
+              setBanks((prev) =>
+                prev.map((b) =>
+                  b.id === bank.id
+                    ? {
+                        ...b,
+                        balance: data.totalBalance ?? b.balance,
+                        lastSyncAt: new Date().toISOString(),
+                      }
+                    : b
+                )
+              );
+            }
+          }
+        } catch {
+          // Continue to next bank
+        }
+      }
+
+      const total = webhookCount + totalImportedFromPluggy;
+      if (total > 0) {
+        notify(
+          'Sincronização Open Finance concluída!',
+          `${total} nova(s) transação(ões) real(is) importada(s) e classificada(s).`
+        );
+      } else if (lastErrorMsg) {
+        notify('Atenção na Sincronização', lastErrorMsg, 'info');
+      } else {
+        notify(
+          'Tudo atualizado!',
+          'Nenhuma transação nova pendente no Meu Pluggy ou Webhook neste momento.',
+          'info'
+        );
+      }
+
+      return total;
+    },
+    [
+      banks,
+      categories,
+      drainQueuedWebhookNotifications,
+      notify,
+      profile.autoClassify,
+      rules,
+      transactions,
+    ]
+  );
 
   const importStatementItems = useCallback(
     (items: ParsedStatementItem[], bankId?: string): number => {

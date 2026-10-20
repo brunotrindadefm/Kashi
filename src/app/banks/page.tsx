@@ -9,10 +9,11 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  ExternalLink,
   FileSpreadsheet,
+  KeyRound,
   Link2,
   Link2Off,
-  Pencil,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -36,7 +37,7 @@ export default function BanksPage() {
     notify,
   } = useFinance();
 
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // Notification Webhook Tester & Config State
@@ -44,10 +45,11 @@ export default function BanksPage() {
   const [selectedBankApp, setSelectedBankApp] = useState('Nubank');
   const [copiedWebhook, setCopiedWebhook] = useState(false);
 
-  // Manual Balance Edit State
+  // Meu Pluggy Item ID & Manual Balance Edit State
   const [editingBankId, setEditingBankId] = useState<BankInstitutionId | null>(
     null
   );
+  const [pluggyItemInput, setPluggyItemInput] = useState('');
   const [balanceInput, setBalanceInput] = useState('');
 
   const connectedBanks = useMemo(
@@ -83,29 +85,43 @@ export default function BanksPage() {
     }
   };
 
-  const handleSyncWebhook = async () => {
-    setIsSyncing(true);
+  const handleSyncSingleBank = async (institutionId: BankInstitutionId) => {
+    setSyncingId(institutionId);
     try {
-      await syncConnectedBanks();
+      await syncConnectedBanks(institutionId);
     } finally {
-      setIsSyncing(false);
+      setSyncingId(null);
     }
   };
 
-  const openBalanceEditor = (
+  const handleSyncAll = async () => {
+    setSyncingId('all');
+    try {
+      await syncConnectedBanks();
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const openBankConfig = (
     institutionId: BankInstitutionId,
-    currentBalance: number
+    currentBalance: number,
+    currentItemId?: string
   ) => {
     setEditingBankId(institutionId);
     setBalanceInput(String(currentBalance || 0));
+    setPluggyItemInput(currentItemId ?? '');
   };
 
-  const handleSaveBalance = (e: React.FormEvent) => {
+  const handleSaveBankConfig = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingBankId) return;
     const parsedBal = parseFloat(balanceInput.replace(',', '.'));
     if (!isNaN(parsedBal)) {
       updateBankBalance(editingBankId, parsedBal);
+    }
+    if (pluggyItemInput.trim()) {
+      toggleBankConnection(editingBankId, pluggyItemInput.trim());
     }
     setEditingBankId(null);
   };
@@ -127,7 +143,7 @@ export default function BanksPage() {
               Conexão Bancária (100% Grátis)
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Webhook de Notificações em Tempo Real + Importador CSV / OFX com Deduplicação
+              Meu Pluggy (Open Finance Pessoa Física), Webhook em Tempo Real & CSV/OFX
             </p>
           </div>
         </div>
@@ -151,7 +167,7 @@ export default function BanksPage() {
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white shadow-sm transition-colors"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Importar Extrato CSV / OFX</span>
+            <span>Importar CSV / OFX</span>
           </button>
         </div>
       </header>
@@ -167,134 +183,80 @@ export default function BanksPage() {
             {formatCurrency(totalBankBalance)}
           </p>
           <p className="text-xs text-slate-300 mt-1">
-            {connectedBanks.length} de {banks.length} instituições ativas • Sem
-            mensalidades ou trials de terceiros
+            {connectedBanks.length} de {banks.length} instituições ativas
           </p>
         </div>
 
         <button
           type="button"
-          onClick={handleSyncWebhook}
-          disabled={isSyncing}
+          onClick={handleSyncAll}
+          disabled={syncingId !== null}
           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shadow-glow transition-all w-full sm:w-auto"
         >
           <RefreshCw
-            className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`}
+            className={`w-4 h-4 ${syncingId === 'all' ? 'animate-spin' : ''}`}
           />
-          {isSyncing ? 'Verificando...' : 'Buscar Notificações do Webhook'}
+          {syncingId === 'all'
+            ? 'Sincronizando...'
+            : 'Sincronizar Meu Pluggy & Webhook'}
         </button>
       </section>
 
-      {/* FREE REAL-TIME NOTIFICATION WEBHOOK SECTION */}
-      <section className="rounded-2xl bg-white dark:bg-slate-900 border border-emerald-500/40 dark:border-emerald-500/40 p-4 sm:p-5 shadow-soft space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-              <BellRing className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
-                  1. Webhook de Notificações do Celular (Tempo Real)
-                </h2>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold uppercase">
-                  100% Grátis para Sempre
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Substitui APIs pagas de Open Finance capturando compras e PIX no
-                segundo em que a notificação chega no seu celular
-              </p>
-            </div>
-          </div>
+      {/* HOW TO USE MEU PLUGGY FOR FREE FOREVER (IGNORING THE 15-DAY DASHBOARD BANNER) */}
+      <section className="rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-300/70 dark:border-emerald-800/70 p-4 sm:p-5 space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-extrabold text-emerald-950 dark:text-emerald-200 flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            Como usar o Open Finance Oficial de Graça para Sempre (Meu Pluggy)
+          </h2>
+          <a
+            href="https://meu.pluggy.ai"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:underline shrink-0"
+          >
+            Abrir meu.pluggy.ai
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
         </div>
-
-        {/* Webhook URL Box */}
-        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Sua URL do Webhook
-            </span>
-            <button
-              type="button"
-              onClick={handleCopyWebhookUrl}
-              className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:underline"
+        <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+          O aviso de <strong>&ldquo;15 dias de trial&rdquo;</strong> que aparece no{' '}
+          <code>dashboard.pluggy.ai</code> vale apenas para empresas B2B. Para{' '}
+          <strong>Pessoa Física (até 5 contas suas)</strong>, o acesso é{' '}
+          <strong>100% gratuito e não expira</strong> se você conectar pelo{' '}
+          <strong>Meu Pluggy</strong>:
+        </p>
+        <ol className="text-xs text-slate-700 dark:text-slate-300 space-y-1 list-decimal list-inside font-medium">
+          <li>
+            Entre em{' '}
+            <a
+              href="https://meu.pluggy.ai"
+              target="_blank"
+              rel="noreferrer"
+              className="font-bold text-emerald-700 dark:text-emerald-400 underline"
             >
-              {copiedWebhook ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  Copiado
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  Copiar URL
-                </>
-              )}
-            </button>
-          </div>
-          <code className="block text-xs font-mono text-slate-800 dark:text-emerald-300 break-all">
-            POST {webhookEndpointUrl}
-          </code>
-          <div className="text-[11px] text-slate-600 dark:text-slate-300 space-y-1 pt-1">
-            <p>
-              • <strong>No Android (app grátis MacroDroid):</strong> Crie uma macro
-              com Gatilho <em>&ldquo;Notificação Recebida&rdquo;</em> (selecione Nubank,
-              Itaú, Inter, Bradesco) → Ação <em>&ldquo;Requisição HTTP POST&rdquo;</em> para a
-              URL acima com corpo JSON:{' '}
-              <code className="px-1 py-0.5 rounded bg-slate-200/80 dark:bg-slate-700">
-                {`{"title": "[not_title]", "text": "[not_text]"}`}
-              </code>
-            </p>
-            <p>
-              • <strong>No iPhone (App Atalhos nativo):</strong> Na aba{' '}
-              <em>Automação</em> → Gatilho <em>&ldquo;Transação (Ao tocar Carteira / Apple Pay)&rdquo;</em>{' '}
-              ou mensagem do banco → Ação{' '}
-              <em>&ldquo;Obter Conteúdo de URL (POST JSON)&rdquo;</em>.
-            </p>
-          </div>
-        </div>
-
-        {/* Interactive Notification Parser & Instant Importer */}
-        <form onSubmit={handleParseNotificationSubmit} className="space-y-2.5">
-          <label className="block text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-            <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            Colar ou testar qualquer notificação do seu banco agora:
-          </label>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <select
-              value={selectedBankApp}
-              onChange={(e) => setSelectedBankApp(e.target.value)}
-              className="sm:w-36 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            >
-              <option value="Nubank">Nubank</option>
-              <option value="Itaú">Itaú</option>
-              <option value="Inter">Banco Inter</option>
-              <option value="Bradesco">Bradesco</option>
-            </select>
-
-            <input
-              type="text"
-              placeholder="Ex: Compra de R$ 64,90 aprovada em IFOOD *RESTAURANTE no cartão..."
-              value={notificationInput}
-              onChange={(e) => setNotificationInput(e.target.value)}
-              className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-
-            <button
-              type="submit"
-              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors shrink-0"
-            >
-              <Send className="w-3.5 h-3.5" />
-              Lançar Notificação
-            </button>
-          </div>
-        </form>
+              meu.pluggy.ai
+            </a>{' '}
+            (com o mesmo e-mail do Dashboard) e conecte seu Nubank, Itaú, Inter
+            ou Bradesco via Open Finance.
+          </li>
+          <li>
+            No <code>dashboard.pluggy.ai</code>, abra sua Aplicação → clique em{' '}
+            <strong>&ldquo;Ir para Demo&rdquo;</strong> → no canto superior direito clique
+            nos 3 pontinhos (<code>...</code>) →{' '}
+            <strong>&ldquo;Copiar Item ID&rdquo;</strong>.
+          </li>
+          <li>
+            Clique em <strong>Configurar</strong> no card do banco abaixo, cole o{' '}
+            <strong>Item ID</strong> e clique em <strong>Sincronizar</strong>!
+          </li>
+        </ol>
       </section>
 
       {/* Institutions Grid: Nubank, Itaú, Inter, Bradesco */}
       <section className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         {banks.map((bank) => {
+          const isThisSyncing = syncingId === bank.institutionId;
           const isEditingThis = editingBankId === bank.institutionId;
 
           return (
@@ -338,9 +300,10 @@ export default function BanksPage() {
 
                 {/* Account Balance Display */}
                 <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                      Saldo em Conta
+                      Saldo em Conta{' '}
+                      {bank.pluggyItemId ? '• Open Finance vinculado' : ''}
                     </p>
                     <p className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white mt-0.5">
                       {bank.connected ? formatCurrency(bank.balance) : 'R$ —'}
@@ -349,43 +312,61 @@ export default function BanksPage() {
                   <button
                     type="button"
                     onClick={() =>
-                      openBalanceEditor(bank.institutionId, bank.balance)
+                      openBankConfig(
+                        bank.institutionId,
+                        bank.balance,
+                        bank.pluggyItemId
+                      )
                     }
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-emerald-500 transition-colors"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-emerald-500 transition-colors shrink-0"
                   >
-                    <Pencil className="w-3 h-3 text-emerald-500" />
-                    Editar Saldo
+                    <KeyRound className="w-3 h-3 text-emerald-500" />
+                    Configurar
                   </button>
                 </div>
 
                 {isEditingThis && (
                   <form
-                    onSubmit={handleSaveBalance}
-                    className="mt-3 p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 space-y-2"
+                    onSubmit={handleSaveBankConfig}
+                    className="mt-3 p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 space-y-2.5"
                   >
-                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300">
-                      Saldo Atual da Conta (R$)
-                    </label>
-                    <div className="flex items-center gap-2">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Item ID do Meu Pluggy (meu.pluggy.ai — Grátis)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Cole aqui o Item ID copiado do Meu Pluggy..."
+                        value={pluggyItemInput}
+                        onChange={(e) => setPluggyItemInput(e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Saldo Atual (R$ — atualizado automático ao sincronizar)
+                      </label>
                       <input
                         type="number"
                         step="0.01"
                         value={balanceInput}
                         onChange={(e) => setBalanceInput(e.target.value)}
-                        className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
                       />
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
                       <button
                         type="submit"
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold"
+                        className="flex-1 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold"
                       >
                         Salvar
                       </button>
                       <button
                         type="button"
                         onClick={() => setEditingBankId(null)}
-                        className="px-2.5 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-xs font-semibold"
+                        className="py-1.5 px-3 rounded-lg bg-slate-200 dark:bg-slate-800 text-xs font-semibold"
                       >
-                        ×
+                        Fechar
                       </button>
                     </div>
                   </form>
@@ -406,7 +387,7 @@ export default function BanksPage() {
                   {bank.connected ? (
                     <>
                       <Link2Off className="w-3.5 h-3.5" />
-                      Desativar Conta
+                      Desativar
                     </>
                   ) : (
                     <>
@@ -416,24 +397,119 @@ export default function BanksPage() {
                   )}
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => setIsImportModalOpen(true)}
-                  className="py-2.5 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950 border border-emerald-200 dark:border-emerald-800/70 text-emerald-700 dark:text-emerald-300 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  Importar Extrato
-                </button>
+                {bank.connected && (
+                  <button
+                    type="button"
+                    onClick={() => handleSyncSingleBank(bank.institutionId)}
+                    disabled={isThisSyncing}
+                    className="py-2.5 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950 border border-emerald-200 dark:border-emerald-800/70 text-emerald-700 dark:text-emerald-300 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${
+                        isThisSyncing ? 'animate-spin' : ''
+                      }`}
+                    />
+                    {isThisSyncing ? 'Sincronizando' : 'Sincronizar'}
+                  </button>
+                )}
               </div>
             </div>
           );
         })}
       </section>
 
+      {/* FREE REAL-TIME NOTIFICATION WEBHOOK SECTION */}
+      <section className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 sm:p-5 shadow-soft space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <BellRing className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  Webhook de Notificações do Celular (Tempo Real)
+                </h2>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold uppercase">
+                  Opcional • Instantâneo
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Para lançar compras no segundo em que você passa o cartão, sem
+                esperar o banco atualizar o Open Finance
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              Endpoint POST do Webhook
+            </span>
+            <button
+              type="button"
+              onClick={handleCopyWebhookUrl}
+              className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:underline"
+            >
+              {copiedWebhook ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  Copiado
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copiar URL
+                </>
+              )}
+            </button>
+          </div>
+          <code className="block text-xs font-mono text-slate-800 dark:text-emerald-300 break-all">
+            POST {webhookEndpointUrl}
+          </code>
+        </div>
+
+        <form onSubmit={handleParseNotificationSubmit} className="space-y-2.5">
+          <label className="block text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+            <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            Colar ou testar qualquer notificação do seu banco agora:
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <select
+              value={selectedBankApp}
+              onChange={(e) => setSelectedBankApp(e.target.value)}
+              className="sm:w-36 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="Nubank">Nubank</option>
+              <option value="Itaú">Itaú</option>
+              <option value="Inter">Banco Inter</option>
+              <option value="Bradesco">Bradesco</option>
+            </select>
+
+            <input
+              type="text"
+              placeholder="Ex: Compra de R$ 64,90 aprovada em IFOOD *RESTAURANTE no cartão..."
+              value={notificationInput}
+              onChange={(e) => setNotificationInput(e.target.value)}
+              className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+
+            <button
+              type="submit"
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors shrink-0"
+            >
+              <Send className="w-3.5 h-3.5" />
+              Lançar Notificação
+            </button>
+          </div>
+        </form>
+      </section>
+
       <div className="flex items-center justify-center gap-1.5 text-xs text-slate-400 pt-1">
         <ShieldCheck className="w-4 h-4 text-emerald-500" />
         <span>
-          100% Gratuito • Sem dependência de APIs pagas ou trials de 15 dias
+          Suas chaves em .env.local ficam 100% locais e protegidas pelo .gitignore
         </span>
       </div>
 
