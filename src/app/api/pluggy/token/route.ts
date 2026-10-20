@@ -1,43 +1,56 @@
 import { NextResponse } from 'next/server';
 
 /**
- * Pluggy Open Finance Brasil Connect Token endpoint.
- * When PLUGGY_CLIENT_ID and PLUGGY_CLIENT_SECRET are set, fetches an official
- * Pluggy Connect token from https://api.pluggy.ai; otherwise returns simulator status.
+ * Resolves a valid Pluggy X-API-KEY using either PLUGGY_CLIENT_ID + PLUGGY_CLIENT_SECRET
+ * or a direct PLUGGY_API_KEY from server environment variables.
  */
-export async function POST() {
+export async function resolvePluggyApiKey(): Promise<string | null> {
   const clientId = process.env.PLUGGY_CLIENT_ID;
   const clientSecret = process.env.PLUGGY_CLIENT_SECRET;
+  const directApiKey = process.env.PLUGGY_API_KEY;
 
   if (
-    !clientId ||
-    !clientSecret ||
-    clientId === 'your-pluggy-client-id' ||
-    clientSecret === 'your-pluggy-client-secret'
+    clientId &&
+    clientSecret &&
+    clientId !== 'your-pluggy-client-id' &&
+    clientSecret !== 'your-pluggy-client-secret'
   ) {
+    try {
+      const authRes = await fetch('https://api.pluggy.ai/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId, clientSecret }),
+        cache: 'no-store',
+      });
+      if (authRes.ok) {
+        const data = (await authRes.json()) as { apiKey?: string };
+        if (data.apiKey) return data.apiKey;
+      }
+    } catch {
+      // Fall through to directApiKey if auth call fails
+    }
+  }
+
+  if (directApiKey && directApiKey !== 'your-pluggy-api-key') {
+    return directApiKey;
+  }
+
+  return null;
+}
+
+export async function POST() {
+  const apiKey = await resolvePluggyApiKey();
+
+  if (!apiKey) {
     return NextResponse.json({
-      mode: 'simulator',
+      mode: 'unconfigured',
       accessToken: null,
-      message: 'Pluggy running in local Open Finance simulator mode.',
+      message:
+        'Configure PLUGGY_CLIENT_ID and PLUGGY_CLIENT_SECRET in .env.local to use Pluggy Open Finance.',
     });
   }
 
   try {
-    const authRes = await fetch('https://api.pluggy.ai/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId, clientSecret }),
-    });
-
-    if (!authRes.ok) {
-      return NextResponse.json(
-        { mode: 'simulator', error: 'Failed to authenticate with Pluggy API' },
-        { status: 200 }
-      );
-    }
-
-    const { apiKey } = (await authRes.json()) as { apiKey: string };
-
     const tokenRes = await fetch('https://api.pluggy.ai/connect_token', {
       method: 'POST',
       headers: {
@@ -45,7 +58,16 @@ export async function POST() {
         'X-API-KEY': apiKey,
       },
       body: JSON.stringify({}),
+      cache: 'no-store',
     });
+
+    if (!tokenRes.ok) {
+      return NextResponse.json({
+        mode: 'error',
+        accessToken: null,
+        message: 'Failed to create Pluggy connect_token with provided credentials.',
+      });
+    }
 
     const tokenData = (await tokenRes.json()) as { accessToken?: string };
 
@@ -55,7 +77,7 @@ export async function POST() {
     });
   } catch {
     return NextResponse.json({
-      mode: 'simulator',
+      mode: 'error',
       accessToken: null,
     });
   }

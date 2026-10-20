@@ -1,4 +1,4 @@
-import type { BankAccount, BankInstitutionId, Category } from '../types/finance';
+import type { BankAccount, Category } from '../types/finance';
 
 export const DEFAULT_CATEGORIES: Category[] = [
   {
@@ -149,67 +149,3 @@ export const INITIAL_BANK_ACCOUNTS: BankAccount[] = [
     connected: false,
   },
 ];
-
-export interface SimulatedBankTransactionSeed {
-  description: string;
-  amount: number;
-  type: 'expense' | 'income';
-  status: 'completed' | 'upcoming';
-  daysOffset: number; // Negative = past, Positive = future
-}
-
-export const BANK_SYNC_SAMPLE_BATCHES: Record<BankInstitutionId, { defaultBalance: number; transactions: SimulatedBankTransactionSeed[] }> = {
-  nubank: {
-    defaultBalance: 4280.5,
-    transactions: [
-      { description: 'iFood *Burger King Delivery', amount: 64.9, type: 'expense', status: 'completed', daysOffset: -1 },
-      { description: 'Uber *Trip Centro', amount: 28.4, type: 'expense', status: 'completed', daysOffset: -2 },
-      { description: 'PIX Enviado - Padaria Pao Dourado', amount: 32.0, type: 'expense', status: 'completed', daysOffset: -3 },
-      { description: 'Netflix.com Assinatura', amount: 59.9, type: 'expense', status: 'completed', daysOffset: -5 },
-      { description: 'PIX Recebido - Freelance UI Design', amount: 1450.0, type: 'income', status: 'completed', daysOffset: -6 },
-      { description: 'Spotify Premium (Agendado)', amount: 21.9, type: 'expense', status: 'upcoming', daysOffset: 5 },
-      { description: 'Fatura NuCartão - Parcela Notebook 03/06', amount: 420.0, type: 'expense', status: 'upcoming', daysOffset: 10 },
-      // Previous months for rich 6-month line chart evolution
-      { description: 'Salário Mensal Tech Corp', amount: 6500.0, type: 'income', status: 'completed', daysOffset: -32 },
-      { description: 'Supermercado Carrefour', amount: 890.0, type: 'expense', status: 'completed', daysOffset: -35 },
-      { description: 'Aluguel Apartamento', amount: 2100.0, type: 'expense', status: 'completed', daysOffset: -38 },
-      { description: 'Salário Mensal Tech Corp', amount: 6500.0, type: 'income', status: 'completed', daysOffset: -62 },
-      { description: 'Aluguel Apartamento', amount: 2100.0, type: 'expense', status: 'completed', daysOffset: -65 },
-      { description: 'iFood *Sushi House', amount: 410.0, type: 'expense', status: 'completed', daysOffset: -68 },
-    ],
-  },
-  itau: {
-    defaultBalance: 7850.0,
-    transactions: [
-      { description: 'Salário Mensal Empresa S/A', amount: 6800.0, type: 'income', status: 'completed', daysOffset: -2 },
-      { description: 'Droga Raia Farmacia', amount: 118.5, type: 'expense', status: 'completed', daysOffset: -3 },
-      { description: 'Posto Shell Combustivel', amount: 240.0, type: 'expense', status: 'completed', daysOffset: -4 },
-      { description: 'Condomínio Residencial Jardins', amount: 680.0, type: 'expense', status: 'completed', daysOffset: -7 },
-      { description: 'Aluguel Mensal (Agendado)', amount: 2200.0, type: 'expense', status: 'upcoming', daysOffset: 7 },
-      { description: 'Plano de Saúde Unimed (Agendado)', amount: 540.0, type: 'expense', status: 'upcoming', daysOffset: 12 },
-      // Previous months
-      { description: 'Salário Mensal Empresa S/A', amount: 6800.0, type: 'income', status: 'completed', daysOffset: -92 },
-      { description: 'Aluguel Mensal', amount: 2200.0, type: 'expense', status: 'completed', daysOffset: -95 },
-      { description: 'Cinema Cinemark Shopping', amount: 185.0, type: 'expense', status: 'completed', daysOffset: -98 },
-    ],
-  },
-  inter: {
-    defaultBalance: 3120.75,
-    transactions: [
-      { description: '99App *Corrida Urbana', amount: 22.8, type: 'expense', status: 'completed', daysOffset: -1 },
-      { description: 'Amazon Prime Assinatura', amount: 19.9, type: 'expense', status: 'completed', daysOffset: -4 },
-      { description: 'Restaurante Outback Steakhouse', amount: 178.0, type: 'expense', status: 'completed', daysOffset: -6 },
-      { description: 'Dividendos FIIs e Ações', amount: 340.0, type: 'income', status: 'completed', daysOffset: -8 },
-      { description: 'Internet Vivo Fibra 600Mb (Agendado)', amount: 129.9, type: 'expense', status: 'upcoming', daysOffset: 6 },
-    ],
-  },
-  bradesco: {
-    defaultBalance: 5490.2,
-    transactions: [
-      { description: 'Supermercado Pão de Açúcar', amount: 312.4, type: 'expense', status: 'completed', daysOffset: -2 },
-      { description: 'Smart Fit Academia Mensalidade', amount: 139.9, type: 'expense', status: 'completed', daysOffset: -5 },
-      { description: 'Seguro Auto Porto Seguro (Parcela 05/12)', amount: 295.0, type: 'expense', status: 'upcoming', daysOffset: 9 },
-      { description: 'Conta de Energia Enel (Agendado)', amount: 198.5, type: 'expense', status: 'upcoming', daysOffset: 11 },
-    ],
-  },
-};

@@ -21,14 +21,14 @@ import {
   TransactionType,
   UserProfile,
 } from '@/types/finance';
-import {
-  BANK_SYNC_SAMPLE_BATCHES,
-  DEFAULT_CATEGORIES,
-  INITIAL_BANK_ACCOUNTS,
-} from '@/lib/constants';
+import { DEFAULT_CATEGORIES, INITIAL_BANK_ACCOUNTS } from '@/lib/constants';
 import { classifyTransaction, extractMerchantKey } from '@/lib/classifier';
 import { getTodayIsoDate } from '@/lib/formatters';
 import { ParsedStatementItem } from '@/lib/statementParser';
+import {
+  parseBankNotification,
+  ParsedBankNotification,
+} from '@/lib/notificationParser';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 
 interface NewTransactionInput {
@@ -61,7 +61,6 @@ interface UserScopedStore {
   transactions: Transaction[];
   banks: BankAccount[];
   rules: ClassificationRule[];
-  syncedBankBatches: string[];
 }
 
 interface FinanceContextValue {
@@ -90,11 +89,17 @@ interface FinanceContextValue {
   confirmTransactionCategory: (transactionId: string) => void;
   settleUpcomingTransaction: (transactionId: string) => void;
   deleteTransaction: (transactionId: string) => void;
+  clearAllTransactions: () => void;
   addCategory: (input: NewCategoryInput) => void;
   deleteCategory: (categoryId: string) => void;
-  toggleBankConnection: (institutionId: BankInstitutionId) => void;
-  syncConnectedBanks: (specificInstitutionId?: BankInstitutionId) => number;
+  toggleBankConnection: (
+    institutionId: BankInstitutionId,
+    pluggyItemId?: string
+  ) => void;
+  updateBankBalance: (institutionId: BankInstitutionId, balance: number) => void;
+  syncConnectedBanks: (specificInstitutionId?: BankInstitutionId) => Promise<number>;
   importStatementItems: (items: ParsedStatementItem[], bankId?: string) => number;
+  ingestNotificationText: (rawText: string, appOrTitle?: string) => boolean;
   predictCategory: (description: string, type: TransactionType) => ClassificationMatch;
   deleteClassificationRule: (ruleId: string) => void;
 }
@@ -118,7 +123,6 @@ function createEmptyUserStore(user: { id: string; name: string; email: string })
     transactions: [],
     banks: INITIAL_BANK_ACCOUNTS,
     rules: [],
-    syncedBankBatches: [],
   };
 }
 
@@ -136,7 +140,6 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [banks, setBanks] = useState<BankAccount[]>(INITIAL_BANK_ACCOUNTS);
   const [rules, setRules] = useState<ClassificationRule[]>([]);
-  const [syncedBankBatches, setSyncedBankBatches] = useState<string[]>([]);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const dismissToast = useCallback((id: string) => {
@@ -160,7 +163,6 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setTransactions(store.transactions);
     setBanks(store.banks.length > 0 ? store.banks : INITIAL_BANK_ACCOUNTS);
     setRules(store.rules);
-    setSyncedBankBatches(store.syncedBankBatches ?? []);
   }, []);
 
   // Hydrate initial session from Supabase or LocalStorage
@@ -247,23 +249,13 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       transactions,
       banks,
       rules,
-      syncedBankBatches,
     };
     try {
       localStorage.setItem(getStoreKeyForUser(profile.id), JSON.stringify(store));
     } catch {
       // Ignore storage quota errors
     }
-  }, [
-    isHydrated,
-    isAuthenticated,
-    profile,
-    categories,
-    transactions,
-    banks,
-    rules,
-    syncedBankBatches,
-  ]);
+  }, [isHydrated, isAuthenticated, profile, categories, transactions, banks, rules]);
 
   const learnMerchantRule = useCallback(
     (description: string, categoryId: string) => {
@@ -312,6 +304,102 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [categories, rules, profile.autoClassify]
   );
 
+  const appendParsedNotificationItem = useCallback(
+    (parsed: ParsedBankNotification) => {
+      const match = classifyTransaction(
+        parsed.description,
+        parsed.type,
+        categories,
+        profile.autoClassify ? rules : []
+      );
+      const matchedBank = parsed.institutionId
+        ? banks.find((b) => b.institutionId === parsed.institutionId)
+        : undefined;
+
+      const newTx: Transaction = {
+        id: `tx-wh-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        description: parsed.description,
+        amount: parsed.amount,
+        type: parsed.type,
+        status: 'completed',
+        categoryId: match.categoryId,
+        suggestedCategoryId: match.categoryId,
+        pendingCategoryConfirmation: true,
+        source: 'bank',
+        bankId: matchedBank?.id,
+        bankName: parsed.bankName,
+        date: parsed.date,
+        createdAt: new Date().toISOString(),
+      };
+
+      setTransactions((prev) => [newTx, ...prev]);
+      return { newTx, categoryName: match.categoryName };
+    },
+    [banks, categories, profile.autoClassify, rules]
+  );
+
+  // Poll /api/webhook/notification for incoming real-time phone notifications
+  const drainQueuedWebhookNotifications = useCallback(async (): Promise<number> => {
+    try {
+      const res = await fetch('/api/webhook/notification', {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (!res.ok) return 0;
+      const data = (await res.json()) as {
+        ok?: boolean;
+        notifications?: ParsedBankNotification[];
+      };
+      const items = data.notifications ?? [];
+      if (items.length === 0) return 0;
+
+      for (const item of items) {
+        appendParsedNotificationItem(item);
+      }
+
+      notify(
+        `${items.length} notificação(ões) recebida(s) em tempo real!`,
+        'Classificadas automaticamente e prontas para revisão.'
+      );
+      return items.length;
+    } catch {
+      return 0;
+    }
+  }, [appendParsedNotificationItem, notify]);
+
+  useEffect(() => {
+    if (!isHydrated || !isAuthenticated) return;
+    drainQueuedWebhookNotifications();
+    const interval = setInterval(() => {
+      drainQueuedWebhookNotifications();
+    }, 12000);
+    return () => clearInterval(interval);
+  }, [isHydrated, isAuthenticated, drainQueuedWebhookNotifications]);
+
+  const ingestNotificationText = useCallback(
+    (rawText: string, appOrTitle?: string): boolean => {
+      const parsed = parseBankNotification(rawText, appOrTitle);
+      if (!parsed) {
+        notify(
+          'Texto de notificação inválido',
+          'Inclua um valor em Reais (ex: R$ 64,90) como nas notificações do banco.',
+          'warning'
+        );
+        return false;
+      }
+
+      const { newTx, categoryName } = appendParsedNotificationItem(parsed);
+      notify(
+        'Notificação bancária capturada!',
+        `${newTx.description} (R$ ${newTx.amount
+          .toFixed(2)
+          .replace('.', ',')}) → Sugestão: ${categoryName}`
+      );
+      return true;
+    },
+    [appendParsedNotificationItem, notify]
+  );
+
   // Authentication Actions
   const login = useCallback(
     async (
@@ -354,7 +442,6 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         return { ok: true };
       }
 
-      // LocalStorage Auth Fallback
       const rawUsers = localStorage.getItem(STORAGE_USERS_KEY);
       const users: StoredAccountCredentials[] = rawUsers
         ? JSON.parse(rawUsers)
@@ -380,7 +467,6 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         return { ok: true };
       }
 
-      // If no user registered yet with that email in local fallback, create the account seamlessly
       const inferredName = normalizedEmail
         .split('@')[0]
         .replace(/[._-]/g, ' ')
@@ -456,7 +542,6 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         return { ok: true };
       }
 
-      // LocalStorage Registration
       const rawUsers = localStorage.getItem(STORAGE_USERS_KEY);
       const users: StoredAccountCredentials[] = rawUsers
         ? JSON.parse(rawUsers)
@@ -495,7 +580,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       setIsAuthenticated(true);
       notify(
         'Conta criada com sucesso!',
-        'Sua conta iniciou limpa e com as categorias padrão prontas.'
+        'Sua conta iniciou limpa e pronta para seus dados reais.'
       );
       return { ok: true };
     },
@@ -677,6 +762,18 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [notify, transactions]
   );
 
+  const clearAllTransactions = useCallback(() => {
+    setTransactions([]);
+    setBanks((prev) =>
+      prev.map((b) => ({ ...b, balance: 0, connected: false, pluggyItemId: undefined }))
+    );
+    notify(
+      'Dados limpos!',
+      'Todas as transações e conexões de teste foram removidas.',
+      'info'
+    );
+  }, [notify]);
+
   // Categories Actions
   const addCategory = useCallback(
     (input: NewCategoryInput) => {
@@ -731,23 +828,22 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [categories, notify]
   );
 
-  // Open Finance Bank Connection & Sync
+  // Open Finance Bank Connection & Real Sync
   const toggleBankConnection = useCallback(
-    (institutionId: BankInstitutionId) => {
+    (institutionId: BankInstitutionId, pluggyItemId?: string) => {
       let connectedNow = false;
       let bankLabel = '';
 
       setBanks((prev) =>
         prev.map((bank) => {
           if (bank.institutionId !== institutionId) return bank;
-          connectedNow = !bank.connected;
+          connectedNow = pluggyItemId ? true : !bank.connected;
           bankLabel = bank.institutionName;
-          const defaultBal =
-            BANK_SYNC_SAMPLE_BATCHES[institutionId]?.defaultBalance ?? 2500;
           return {
             ...bank,
             connected: connectedNow,
-            balance: connectedNow ? defaultBal : 0,
+            pluggyItemId: connectedNow ? pluggyItemId ?? bank.pluggyItemId : undefined,
+            balance: connectedNow ? bank.balance : 0,
             lastSyncAt: connectedNow ? new Date().toISOString() : undefined,
           };
         })
@@ -755,13 +851,15 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
       if (connectedNow) {
         notify(
-          `${bankLabel} conectado via Open Finance!`,
-          'Clique em "Sincronizar Banco" para importar as transações do extrato.'
+          `${bankLabel} ativado!`,
+          pluggyItemId
+            ? 'Item ID Pluggy vinculado. Sincronize para buscar seu extrato real.'
+            : 'Use o Webhook de Notificação, CSV/OFX ou Pluggy Open Finance para receber seus dados reais.'
         );
       } else {
         notify(
           `${bankLabel} desconectado`,
-          'A conexão Open Finance foi encerrada.',
+          'A instituição foi desvinculada.',
           'info'
         );
       }
@@ -769,116 +867,134 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [notify]
   );
 
+  const updateBankBalance = useCallback(
+    (institutionId: BankInstitutionId, balance: number) => {
+      setBanks((prev) =>
+        prev.map((b) =>
+          b.institutionId === institutionId ? { ...b, balance } : b
+        )
+      );
+      notify('Saldo atualizado', 'O saldo da conta foi salvo.');
+    },
+    [notify]
+  );
+
   const syncConnectedBanks = useCallback(
-    (specificInstitutionId?: BankInstitutionId): number => {
+    async (specificInstitutionId?: BankInstitutionId): Promise<number> => {
+      // 1. First drain any real-time webhook notifications queued on the server
+      const webhookCount = await drainQueuedWebhookNotifications();
+
       const targetBanks = banks.filter((b) =>
         specificInstitutionId
           ? b.institutionId === specificInstitutionId && b.connected
           : b.connected
       );
 
-      if (targetBanks.length === 0) {
+      if (targetBanks.length === 0 && webhookCount === 0) {
         notify(
           'Nenhum banco conectado',
-          'Conecte pelo menos uma instituição em Bancos para sincronizar.',
+          'Conecte uma instituição em Bancos ou use o Webhook/CSV para importar dados reais.',
           'warning'
         );
         return 0;
       }
 
-      const generatedTransactions: Transaction[] = [];
-      const newlySyncedIds: string[] = [];
+      let totalImportedFromPluggy = 0;
 
       for (const bank of targetBanks) {
-        const batch = BANK_SYNC_SAMPLE_BATCHES[bank.institutionId];
-        if (!batch) continue;
-
-        const alreadySyncedInitialBatch = syncedBankBatches.includes(
-          bank.institutionId
-        );
-
-        const seedsToImport = alreadySyncedInitialBatch
-          ? [
-              {
-                description:
-                  bank.institutionId === 'nubank'
-                    ? 'iFood *Açaí Concept'
-                    : bank.institutionId === 'itau'
-                    ? 'Uber *Viagem Aeroporto'
-                    : 'PIX Enviado - Cafeteria Central',
-                amount:
-                  bank.institutionId === 'nubank'
-                    ? 44.9
-                    : bank.institutionId === 'itau'
-                    ? 58.2
-                    : 26.5,
-                type: 'expense' as const,
-                status: 'completed' as const,
-                daysOffset: 0,
-              },
-            ]
-          : batch.transactions;
-
-        for (const seed of seedsToImport) {
-          const match = classifyTransaction(
-            seed.description,
-            seed.type,
-            categories,
-            profile.autoClassify ? rules : []
-          );
-          const isRecentMonth = seed.daysOffset >= -15;
-          generatedTransactions.push({
-            id: `tx-bank-${bank.institutionId}-${Date.now()}-${Math.random()
-              .toString(36)
-              .slice(2, 7)}`,
-            description: seed.description,
-            amount: seed.amount,
-            type: seed.type,
-            status: seed.status,
-            categoryId: match.categoryId,
-            suggestedCategoryId: match.categoryId,
-            // Recent completed bank transactions require 1-tap category confirmation
-            pendingCategoryConfirmation:
-              seed.status === 'completed' && isRecentMonth,
-            source: 'bank',
-            bankId: bank.id,
-            bankName: bank.institutionName,
-            date: getTodayIsoDate(seed.daysOffset),
-            createdAt: new Date().toISOString(),
+        try {
+          const res = await fetch('/api/pluggy/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemId: bank.pluggyItemId }),
           });
-        }
+          const data = (await res.json()) as {
+            ok?: boolean;
+            mode?: string;
+            totalBalance?: number;
+            transactions?: {
+              description: string;
+              amount: number;
+              type: 'expense' | 'income';
+              status: 'completed' | 'upcoming';
+              date: string;
+            }[];
+            error?: string;
+          };
 
-        if (!alreadySyncedInitialBatch) {
-          newlySyncedIds.push(bank.institutionId);
+          if (data.ok && data.transactions) {
+            const realTxs: Transaction[] = data.transactions.map((t, idx) => {
+              const match = classifyTransaction(
+                t.description,
+                t.type,
+                categories,
+                profile.autoClassify ? rules : []
+              );
+              return {
+                id: `tx-pluggy-${bank.institutionId}-${Date.now()}-${idx}`,
+                description: t.description,
+                amount: t.amount,
+                type: t.type,
+                status: t.status,
+                categoryId: match.categoryId,
+                suggestedCategoryId: match.categoryId,
+                pendingCategoryConfirmation: t.status === 'completed',
+                source: 'bank',
+                bankId: bank.id,
+                bankName: bank.institutionName,
+                date: t.date,
+                createdAt: new Date().toISOString(),
+              };
+            });
+
+            if (realTxs.length > 0) {
+              setTransactions((prev) => [...realTxs, ...prev]);
+              totalImportedFromPluggy += realTxs.length;
+            }
+
+            if (typeof data.totalBalance === 'number') {
+              setBanks((prev) =>
+                prev.map((b) =>
+                  b.id === bank.id
+                    ? {
+                        ...b,
+                        balance: data.totalBalance ?? b.balance,
+                        lastSyncAt: new Date().toISOString(),
+                      }
+                    : b
+                )
+              );
+            }
+          }
+        } catch {
+          // Continue to next bank
         }
       }
 
-      if (generatedTransactions.length > 0) {
-        setTransactions((prev) => [...generatedTransactions, ...prev]);
-        setBanks((prev) =>
-          prev.map((b) =>
-            targetBanks.some((tb) => tb.id === b.id)
-              ? { ...b, lastSyncAt: new Date().toISOString() }
-              : b
-          )
-        );
-        if (newlySyncedIds.length > 0) {
-          setSyncedBankBatches((prev) => [
-            ...Array.from(new Set([...prev, ...newlySyncedIds])),
-          ]);
-        }
-        const pendingCount = generatedTransactions.filter(
-          (t) => t.pendingCategoryConfirmation
-        ).length;
+      const total = webhookCount + totalImportedFromPluggy;
+      if (total > 0) {
         notify(
-          'Sincronização Open Finance concluída!',
-          `${generatedTransactions.length} lançamentos sincronizados (${pendingCount} aguardando sua confirmação).`
+          'Sincronização concluída!',
+          `${total} lançamento(s) real(is) sincronizado(s) e classificado(s).`
+        );
+      } else {
+        notify(
+          'Sincronização verificada',
+          'Nenhuma nova transação pendente no Webhook ou Pluggy neste momento. Use o Webhook de Notificação ou CSV/OFX para enviar novos lançamentos.',
+          'info'
         );
       }
 
-      return generatedTransactions.length;
+      return total;
     },
-    [banks, categories, notify, profile.autoClassify, rules, syncedBankBatches]
+    [
+      banks,
+      categories,
+      drainQueuedWebhookNotifications,
+      notify,
+      profile.autoClassify,
+      rules,
+    ]
   );
 
   const importStatementItems = useCallback(
@@ -965,11 +1081,14 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       confirmTransactionCategory,
       settleUpcomingTransaction,
       deleteTransaction,
+      clearAllTransactions,
       addCategory,
       deleteCategory,
       toggleBankConnection,
+      updateBankBalance,
       syncConnectedBanks,
       importStatementItems,
+      ingestNotificationText,
       predictCategory,
       deleteClassificationRule,
     }),
@@ -995,11 +1114,14 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       confirmTransactionCategory,
       settleUpcomingTransaction,
       deleteTransaction,
+      clearAllTransactions,
       addCategory,
       deleteCategory,
       toggleBankConnection,
+      updateBankBalance,
       syncConnectedBanks,
       importStatementItems,
+      ingestNotificationText,
       predictCategory,
       deleteClassificationRule,
     ]

@@ -144,10 +144,14 @@ Whenever you modify UI components or pages, you **MUST** preserve these 6 non-ne
 - When configured, authentication uses Supabase Auth (`signInWithPassword`, `signUp`, `resetPasswordForEmail`, `signOut`), backed by the schema in `supabase/schema.sql`.
 - When omitted, `FinanceContext` automatically falls back to LocalStorage scoped per user ID (`kashi_store_${userId}_v1` and `kashi_active_session_v1`), preserving multi-user isolation and session persistence across reloads.
 
-### 5.3. Open Finance & Statement Importer (`src/lib/statementParser.ts`)
-- **Pluggy Connect API (`/api/pluggy/token`):** Authenticates with `https://api.pluggy.ai/auth` when `PLUGGY_CLIENT_ID` and `PLUGGY_CLIENT_SECRET` are provided, or returns `{ mode: 'simulator' }`.
-- **Bank Sync Simulator (`syncConnectedBanks`):** Generates realistic transaction batches defined in `BANK_SYNC_SAMPLE_BATCHES` (`src/lib/constants.ts`) for connected institutions (`nubank`, `itau`, `inter`, `bradesco`). Recent completed items enter with `pendingCategoryConfirmation: true` so the user can review and confirm them in 1 tap.
-- **CSV & OFX Parser (`parseBankStatementFile`):**
+### 5.3. Real Bank Data Ingestion (3 Zero-Mock Channels)
+- **Strict Secret Hygiene:** `.env` and `.env.local` are strictly git-ignored. Agents and developers must **NEVER** read, print, log, or commit `.env.local` or credential values.
+- **Channel 1 — Real-Time Mobile Push Notification Webhook (`100% Free`):**
+  - `src/lib/notificationParser.ts` (`parseBankNotification`) extracts BRL amounts (`R$`), merchant/PIX descriptions, bank institutions (`nubank`, `itau`, `inter`, `bradesco`), and transaction type (`expense` vs `income`) from raw push notifications.
+  - `POST /api/webhook/notification` (`src/app/api/webhook/notification/route.ts`) receives notifications forwarded by Android (**MacroDroid** / **Notification Forwarder**) or iOS (**Shortcuts / Apple Pay Automation**), and `FinanceContext` automatically drains and classifies incoming items.
+- **Channel 2 — Pluggy Open Finance Brasil API (`/api/pluggy/token` & `/api/pluggy/sync`):**
+  - Authenticates on the server using `PLUGGY_CLIENT_ID` + `PLUGGY_CLIENT_SECRET` (or `PLUGGY_API_KEY`) and fetches real accounts (`/accounts?itemId=...`) and transactions (`/transactions?accountId=...`) from `https://api.pluggy.ai`.
+- **Channel 3 — CSV & OFX Statement Parser (`src/lib/statementParser.ts`):**
   - Supports comma (`,`) and semicolon (`;`) CSV files, Brazilian currency formatting (`-1.234,56`), ISO (`YYYY-MM-DD`) and Brazilian (`DD/MM/YYYY`) dates, and OFX `<STMTTRN>` blocks.
   - Transactions dated in the future (`date > today`) are automatically classified as `status: 'upcoming'` (`Seguintes`).
 

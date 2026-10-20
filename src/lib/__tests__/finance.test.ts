@@ -12,6 +12,7 @@ import {
   parseCsvStatement,
   parseOfxStatement,
 } from '../statementParser.ts';
+import { parseBankNotification } from '../notificationParser.ts';
 import type { Category, ClassificationRule } from '../../types/finance.ts';
 
 describe('Kashi Smart Classification Engine (classifier.ts)', () => {
@@ -221,6 +222,44 @@ ${futureDate},-129.90,Internet Vivo Fibra Agendado`;
     );
     assert.equal(ofxItems.length, 1);
     assert.equal(ofxItems[0].description, 'Netflix');
+  });
+});
+
+describe('Kashi Real-Time Bank Notification Parser (notificationParser.ts)', () => {
+  it('parses Nubank credit card purchase notification', () => {
+    const parsed = parseBankNotification(
+      'Compra de R$ 64,90 APROVADA em IFOOD *RESTAURANTE para o cartão com final 4321.',
+      'Nubank'
+    );
+    assert.ok(parsed);
+    assert.equal(parsed.amount, 64.9);
+    assert.equal(parsed.type, 'expense');
+    assert.equal(parsed.institutionId, 'nubank');
+    assert.equal(parsed.description, 'IFOOD *RESTAURANTE');
+  });
+
+  it('parses outgoing PIX notification', () => {
+    const parsed = parseBankNotification(
+      'Transferência de R$ 35,00 enviada via Pix para Padaria Pao Dourado.',
+      'Itaú'
+    );
+    assert.ok(parsed);
+    assert.equal(parsed.amount, 35);
+    assert.equal(parsed.type, 'expense');
+    assert.equal(parsed.institutionId, 'itau');
+    assert.equal(parsed.description, 'PIX Enviado - Padaria Pao Dourado');
+  });
+
+  it('parses incoming PIX notification as income', () => {
+    const parsed = parseBankNotification(
+      'Você recebeu uma transferência de R$ 1.450,00 de Empresa Tech via Pix.',
+      'Banco Inter'
+    );
+    assert.ok(parsed);
+    assert.equal(parsed.amount, 1450);
+    assert.equal(parsed.type, 'income');
+    assert.equal(parsed.institutionId, 'inter');
+    assert.equal(parsed.description, 'PIX Recebido - Empresa Tech');
   });
 });
 
