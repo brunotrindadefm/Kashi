@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="128" fill="url(#kashi_grad)" />
+  <path d="M168 144V368M168 256L312 144M228 210L344 368" stroke="white" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="352" cy="152" r="28" fill="#A7F3D0" />
+  <defs>
+    <linearGradient id="kashi_grad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10B981" />
+      <stop offset="1" stop-color="#047857" />
+    </linearGradient>
+  </defs>
+</svg>
