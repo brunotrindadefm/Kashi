@@ -64,24 +64,17 @@ async function resolvePluggyApiKey(): Promise<string | null> {
  * and requires the caller's personal Meu Pluggy UUID `itemId`.
  */
 export async function POST(req: NextRequest) {
-  // 1. Verify Supabase JWT session if Supabase is configured
-  if (isSupabaseConfigured) {
-    const authHeader = req.headers.get('authorization');
-    const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
-    if (!token) {
-      return NextResponse.json(
-        {
-          ok: false,
-          mode: 'unauthorized',
-          error: 'Sessão não autenticada. Faça login no Kashi.',
-        },
-        { status: 401 }
-      );
-    }
+  // 1. Verify Supabase JWT session if Supabase is configured and a Bearer token is provided
+  const authHeader = req.headers.get('authorization');
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+  const supabaseKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
+  if (isSupabaseConfigured && supabaseKey && token) {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      supabaseKey
     );
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data.user) {

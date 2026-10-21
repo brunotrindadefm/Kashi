@@ -230,6 +230,17 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
             name: string;
             email: string;
           };
+          const configuredOwnerEmail =
+            process.env.NEXT_PUBLIC_OWNER_EMAIL?.trim().toLowerCase();
+          if (
+            configuredOwnerEmail &&
+            configuredOwnerEmail !== 'your-owner-email@example.com' &&
+            sessionUser.email.toLowerCase() !== configuredOwnerEmail
+          ) {
+            localStorage.removeItem(STORAGE_SESSION_KEY);
+            setIsAuthenticated(false);
+            return;
+          }
           const rawStore = localStorage.getItem(getStoreKeyForUser(sessionUser.id));
           if (rawStore) {
             const parsed = JSON.parse(rawStore) as UserScopedStore;
@@ -448,36 +459,48 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
       const supabase = getSupabaseClient();
       if (supabase && isSupabaseConfigured) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: normalizedEmail,
-          password,
-        });
-        if (error || !data.user) {
-          return {
-            ok: false,
-            error: error?.message || 'Credenciais inválidas.',
-          };
+        let authData = (
+          await supabase.auth.signInWithPassword({
+            email: normalizedEmail,
+            password,
+          })
+        ).data;
+
+        if (!authData?.user && normalizedEmail === configuredOwnerEmail) {
+          const signUpRes = await supabase.auth.signUp({
+            email: normalizedEmail,
+            password,
+          });
+          if (signUpRes.data?.user && signUpRes.data?.session) {
+            authData = {
+              user: signUpRes.data.user,
+              session: signUpRes.data.session,
+            };
+          }
         }
-        const userObj = {
-          id: data.user.id,
-          name:
-            (data.user.user_metadata?.name as string) ||
-            normalizedEmail.split('@')[0],
-          email: normalizedEmail,
-        };
-        const remoteStore = await fetchUserStoreFromSupabase(userObj);
-        const rawStore = localStorage.getItem(getStoreKeyForUser(userObj.id));
-        const store =
-          remoteStore ??
-          (rawStore
-            ? (JSON.parse(rawStore) as UserScopedStore)
-            : createEmptyUserStore(userObj));
-        localStorage.setItem(getStoreKeyForUser(userObj.id), JSON.stringify(store));
-        localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(userObj));
-        applyStoreToState(store);
-        setIsAuthenticated(true);
-        notify('Bem-vindo de volta!', `Sessão iniciada como ${store.profile.name}.`);
-        return { ok: true };
+
+        if (authData?.user && authData?.session) {
+          const userObj = {
+            id: authData.user.id,
+            name:
+              (authData.user.user_metadata?.name as string) ||
+              normalizedEmail.split('@')[0],
+            email: normalizedEmail,
+          };
+          const remoteStore = await fetchUserStoreFromSupabase(userObj);
+          const rawStore = localStorage.getItem(getStoreKeyForUser(userObj.id));
+          const store =
+            remoteStore ??
+            (rawStore
+              ? (JSON.parse(rawStore) as UserScopedStore)
+              : createEmptyUserStore(userObj));
+          localStorage.setItem(getStoreKeyForUser(userObj.id), JSON.stringify(store));
+          localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(userObj));
+          applyStoreToState(store);
+          setIsAuthenticated(true);
+          notify('Bem-vindo de volta!', `Sessão iniciada como ${store.profile.name}.`);
+          return { ok: true };
+        }
       }
 
       const rawUsers = localStorage.getItem(STORAGE_USERS_KEY);
@@ -505,8 +528,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         return { ok: true };
       }
 
-      // Single-Owner Lock in local mode: only allow bootstrapping if 0 accounts exist
-      if (users.length >= 1) {
+      // Single-Owner Lock in local mode: only allow bootstrapping if 0 accounts exist or if logging in with configured NEXT_PUBLIC_OWNER_EMAIL
+      if (users.length >= 1 && normalizedEmail !== configuredOwnerEmail) {
         return {
           ok: false,
           error:
