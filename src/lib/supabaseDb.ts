@@ -9,6 +9,15 @@ import type {
   UserProfile,
 } from '../types/finance';
 
+/**
+ * Cloud DB persistence is disabled by default so that bank balances and
+ * transactions stay 100% local on the user's PC (localStorage) unless
+ * NEXT_PUBLIC_ENABLE_SUPABASE_DB=true is explicitly set.
+ */
+const isCloudDbSyncEnabled =
+  isSupabaseConfigured &&
+  process.env.NEXT_PUBLIC_ENABLE_SUPABASE_DB === 'true';
+
 export async function fetchUserStoreFromSupabase(user: {
   id: string;
   name: string;
@@ -21,7 +30,7 @@ export async function fetchUserStoreFromSupabase(user: {
   rules: ClassificationRule[];
 } | null> {
   const supabase = getSupabaseClient();
-  if (!supabase || !isSupabaseConfigured) return null;
+  if (!supabase || !isCloudDbSyncEnabled) return null;
 
   try {
     const [profileRes, categoriesRes, banksRes, txRes, rulesRes] =
@@ -122,7 +131,7 @@ export async function fetchUserStoreFromSupabase(user: {
 
 export async function syncProfileToSupabase(profile: UserProfile) {
   const supabase = getSupabaseClient();
-  if (!supabase || !isSupabaseConfigured || !profile.id) return;
+  if (!supabase || !isCloudDbSyncEnabled || !profile.id) return;
   await supabase.from('profiles').upsert({
     id: profile.id,
     name: profile.name,
@@ -138,7 +147,7 @@ export async function insertTransactionsToSupabase(
   txs: Transaction[]
 ) {
   const supabase = getSupabaseClient();
-  if (!supabase || !isSupabaseConfigured || !userId || txs.length === 0) return;
+  if (!supabase || !isCloudDbSyncEnabled || !userId || txs.length === 0) return;
   await supabase.from('transactions').upsert(
     txs.map((tx) => ({
       id: tx.id,
@@ -165,7 +174,7 @@ export async function updateTransactionInSupabase(
   updates: Record<string, unknown>
 ) {
   const supabase = getSupabaseClient();
-  if (!supabase || !isSupabaseConfigured || !userId) return;
+  if (!supabase || !isCloudDbSyncEnabled || !userId) return;
   await supabase
     .from('transactions')
     .update(updates)
@@ -178,7 +187,7 @@ export async function deleteTransactionFromSupabase(
   txId: string
 ) {
   const supabase = getSupabaseClient();
-  if (!supabase || !isSupabaseConfigured || !userId) return;
+  if (!supabase || !isCloudDbSyncEnabled || !userId) return;
   await supabase
     .from('transactions')
     .delete()
@@ -188,14 +197,14 @@ export async function deleteTransactionFromSupabase(
 
 export async function clearAllTransactionsFromSupabase(userId: string) {
   const supabase = getSupabaseClient();
-  if (!supabase || !isSupabaseConfigured || !userId) return;
+  if (!supabase || !isCloudDbSyncEnabled || !userId) return;
   await supabase.from('transactions').delete().eq('user_id', userId);
   await supabase.from('bank_accounts').delete().eq('user_id', userId);
 }
 
 export async function upsertBankToSupabase(userId: string, bank: BankAccount) {
   const supabase = getSupabaseClient();
-  if (!supabase || !isSupabaseConfigured || !userId) return;
+  if (!supabase || !isCloudDbSyncEnabled || !userId) return;
   await supabase.from('bank_accounts').upsert(
     {
       user_id: userId,
