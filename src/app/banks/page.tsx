@@ -51,6 +51,90 @@ export default function BanksPage() {
   );
   const [pluggyItemInput, setPluggyItemInput] = useState('');
   const [balanceInput, setBalanceInput] = useState('');
+  const [openingWidgetFor, setOpeningWidgetFor] =
+    useState<BankInstitutionId | null>(null);
+
+  const handleOpenPluggyWidget = async (institutionId: BankInstitutionId) => {
+    setOpeningWidgetFor(institutionId);
+    try {
+      const res = await fetch('/api/pluggy/connect-token', { method: 'POST' });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        connectToken?: string;
+        error?: string;
+      };
+
+      if (!data.ok || !data.connectToken) {
+        notify(
+          'Erro ao iniciar Pluggy Connect',
+          data.error || 'Verifique PLUGGY_CLIENT_ID e SECRET no .env.local.',
+          'warning'
+        );
+        return;
+      }
+
+      if (typeof window !== 'undefined' && !(window as unknown as { PluggyConnect?: unknown }).PluggyConnect) {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src =
+            'https://cdn.pluggy.ai/pluggy-connect/v2.7.0/pluggy-connect.js';
+          script.async = true;
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('Falha ao carregar SDK'));
+          document.body.appendChild(script);
+        });
+      }
+
+      const PluggyConnectClass = (
+        window as unknown as {
+          PluggyConnect?: new (config: {
+            connectToken: string;
+            includeSandbox?: boolean;
+            onSuccess: (itemData: { item?: { id?: string } }) => void;
+            onError?: (err: { message?: string }) => void;
+          }) => { init: () => void };
+        }
+      ).PluggyConnect;
+
+      if (!PluggyConnectClass) {
+        notify(
+          'SDK indisponível',
+          'Não foi possível abrir a janela do Pluggy Connect.',
+          'warning'
+        );
+        return;
+      }
+
+      const pluggyConnect = new PluggyConnectClass({
+        connectToken: data.connectToken,
+        includeSandbox: true,
+        onSuccess: async (itemData) => {
+          const connectedItemId = itemData?.item?.id;
+          if (connectedItemId) {
+            toggleBankConnection(institutionId, connectedItemId);
+            setTimeout(() => {
+              handleSyncSingleBank(institutionId);
+            }, 600);
+          }
+        },
+        onError: (err) => {
+          if (err?.message) {
+            notify('Erro na conexão Open Finance', err.message, 'warning');
+          }
+        },
+      });
+
+      pluggyConnect.init();
+    } catch {
+      notify(
+        'Erro ao abrir Pluggy Connect',
+        'Tente novamente ou cole o Item ID manualmente em Configurar.',
+        'warning'
+      );
+    } finally {
+      setOpeningWidgetFor(null);
+    }
+  };
 
   const connectedBanks = useMemo(
     () => banks.filter((b) => b.connected),
@@ -375,42 +459,43 @@ export default function BanksPage() {
 
               {/* Action Buttons */}
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => toggleBankConnection(bank.institutionId)}
-                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors ${
-                    bank.connected
-                      ? 'bg-slate-100 dark:bg-slate-800 hover:bg-red-50 dark:hover:bg-red-950/40 text-slate-700 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400'
-                      : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
-                  }`}
-                >
-                  {bank.connected ? (
-                    <>
-                      <Link2Off className="w-3.5 h-3.5" />
-                      Desativar
-                    </>
-                  ) : (
-                    <>
-                      <Link2 className="w-3.5 h-3.5" />
-                      Ativar Conta
-                    </>
-                  )}
-                </button>
-
-                {bank.connected && (
+                {!bank.connected ? (
                   <button
                     type="button"
-                    onClick={() => handleSyncSingleBank(bank.institutionId)}
-                    disabled={isThisSyncing}
-                    className="py-2.5 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950 border border-emerald-200 dark:border-emerald-800/70 text-emerald-700 dark:text-emerald-300 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors"
+                    onClick={() => handleOpenPluggyWidget(bank.institutionId)}
+                    disabled={openingWidgetFor === bank.institutionId}
+                    className="flex-1 py-2.5 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white shadow-sm"
                   >
-                    <RefreshCw
-                      className={`w-3.5 h-3.5 ${
-                        isThisSyncing ? 'animate-spin' : ''
-                      }`}
-                    />
-                    {isThisSyncing ? 'Sincronizando' : 'Sincronizar'}
+                    <Link2 className="w-3.5 h-3.5" />
+                    {openingWidgetFor === bank.institutionId
+                      ? 'Abrindo Open Finance...'
+                      : 'Conectar Direto (Open Finance / Meu Pluggy)'}
                   </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleSyncSingleBank(bank.institutionId)}
+                      disabled={isThisSyncing}
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${
+                          isThisSyncing ? 'animate-spin' : ''
+                        }`}
+                      />
+                      {isThisSyncing ? 'Sincronizando...' : 'Sincronizar Extrato'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => toggleBankConnection(bank.institutionId)}
+                      className="py-2.5 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors bg-slate-100 dark:bg-slate-800 hover:bg-red-50 dark:hover:bg-red-950/40 text-slate-700 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400"
+                    >
+                      <Link2Off className="w-3.5 h-3.5" />
+                      Desconectar
+                    </button>
+                  </>
                 )}
               </div>
             </div>
