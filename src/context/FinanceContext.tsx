@@ -30,6 +30,15 @@ import {
   ParsedBankNotification,
 } from '@/lib/notificationParser';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
+import {
+  clearAllTransactionsFromSupabase,
+  deleteTransactionFromSupabase,
+  fetchUserStoreFromSupabase,
+  insertTransactionsToSupabase,
+  syncProfileToSupabase,
+  updateTransactionInSupabase,
+  upsertBankToSupabase,
+} from '@/lib/supabaseDb';
 
 interface NewTransactionInput {
   description: string;
@@ -197,6 +206,19 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
             }
             setIsAuthenticated(true);
             setIsHydrated(true);
+
+            const remoteStore = await fetchUserStoreFromSupabase({
+              id: userId,
+              name: userName,
+              email: userEmail,
+            });
+            if (remoteStore) {
+              localStorage.setItem(
+                getStoreKeyForUser(userId),
+                JSON.stringify(remoteStore)
+              );
+              applyStoreToState(remoteStore);
+            }
             return;
           }
         }
@@ -333,9 +355,10 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       };
 
       setTransactions((prev) => [newTx, ...prev]);
+      insertTransactionsToSupabase(profile.id, [newTx]);
       return { newTx, categoryName: match.categoryName };
     },
-    [banks, categories, profile.autoClassify, rules]
+    [banks, categories, profile.autoClassify, profile.id, rules]
   );
 
   // Poll /api/webhook/notification for incoming real-time phone notifications
@@ -442,10 +465,13 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
             normalizedEmail.split('@')[0],
           email: normalizedEmail,
         };
+        const remoteStore = await fetchUserStoreFromSupabase(userObj);
         const rawStore = localStorage.getItem(getStoreKeyForUser(userObj.id));
-        const store = rawStore
-          ? (JSON.parse(rawStore) as UserScopedStore)
-          : createEmptyUserStore(userObj);
+        const store =
+          remoteStore ??
+          (rawStore
+            ? (JSON.parse(rawStore) as UserScopedStore)
+            : createEmptyUserStore(userObj));
         localStorage.setItem(getStoreKeyForUser(userObj.id), JSON.stringify(store));
         localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(userObj));
         applyStoreToState(store);
@@ -568,7 +594,11 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
   const updateProfile = useCallback(
     (updates: Partial<Omit<UserProfile, 'id'>>) => {
-      setProfile((prev) => ({ ...prev, ...updates }));
+      setProfile((prev) => {
+        const next = { ...prev, ...updates };
+        syncProfileToSupabase(next);
+        return next;
+      });
       notify('Preferências salvas', 'Suas configurações foram atualizadas.');
     },
     [notify]
@@ -594,6 +624,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       };
 
       setTransactions((prev) => [newTx, ...prev]);
+      insertTransactionsToSupabase(profile.id, [newTx]);
       learnMerchantRule(newTx.description, newTx.categoryId);
 
       notify(
@@ -603,7 +634,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         `${newTx.description} • R$ ${newTx.amount.toFixed(2).replace('.', ',')}`
       );
     },
-    [banks, learnMerchantRule, notify]
+    [banks, learnMerchantRule, notify, profile.id]
   );
 
   const updateTransactionCategory = useCallback(
@@ -623,6 +654,12 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         })
       );
 
+      updateTransactionInSupabase(profile.id, transactionId, {
+        category_id: categoryId,
+        suggested_category_id: categoryId,
+        pending_category_confirmation: false,
+      });
+
       if (txDesc) {
         learnMerchantRule(txDesc, categoryId);
       }
@@ -634,7 +671,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [categories, learnMerchantRule, notify]
+    [categories, learnMerchantRule, notify, profile.id]
   );
 
   const confirmTransactionCategory = useCallback(
@@ -651,6 +688,10 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         })
       );
 
+      updateTransactionInSupabase(profile.id, transactionId, {
+        pending_category_confirmation: false,
+      });
+
       if (confirmedTx) {
         learnMerchantRule(confirmedTx.description, confirmedTx.categoryId);
         const cat = categories.find((c) => c.id === confirmedTx?.categoryId);
@@ -660,12 +701,13 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [categories, learnMerchantRule, notify]
+    [categories, learnMerchantRule, notify, profile.id]
   );
 
   const settleUpcomingTransaction = useCallback(
     (transactionId: string) => {
       let settledTx: Transaction | undefined;
+      const todayIso = getTodayIsoDate();
       setTransactions((prev) =>
         prev.map((tx) => {
           if (tx.id !== transactionId) return tx;
@@ -673,10 +715,15 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
           return {
             ...tx,
             status: 'completed',
-            date: getTodayIsoDate(),
+            date: todayIso,
           };
         })
       );
+
+      updateTransactionInSupabase(profile.id, transactionId, {
+        status: 'completed',
+        date: todayIso,
+      });
 
       if (settledTx) {
         notify(
@@ -685,13 +732,14 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [notify]
+    [notify, profile.id]
   );
 
   const deleteTransaction = useCallback(
     (transactionId: string) => {
       const target = transactions.find((t) => t.id === transactionId);
       setTransactions((prev) => prev.filter((t) => t.id !== transactionId));
+      deleteTransactionFromSupabase(profile.id, transactionId);
       if (target) {
         notify(
           'Transação excluída',
@@ -700,7 +748,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [notify, transactions]
+    [notify, profile.id, transactions]
   );
 
   const clearAllTransactions = useCallback(() => {
@@ -708,12 +756,13 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setBanks((prev) =>
       prev.map((b) => ({ ...b, balance: 0, connected: false, pluggyItemId: undefined }))
     );
+    clearAllTransactionsFromSupabase(profile.id);
     notify(
       'Dados limpos!',
       'Todas as transações e conexões de teste foram removidas.',
       'info'
     );
-  }, [notify]);
+  }, [notify, profile.id]);
 
   // Categories Actions
   const addCategory = useCallback(
@@ -780,7 +829,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
           if (bank.institutionId !== institutionId) return bank;
           connectedNow = pluggyItemId ? true : !bank.connected;
           bankLabel = bank.institutionName;
-          return {
+          const updatedBank: BankAccount = {
             ...bank,
             connected: connectedNow,
             pluggyItemId: connectedNow
@@ -789,6 +838,8 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
             balance: connectedNow ? bank.balance : 0,
             lastSyncAt: connectedNow ? new Date().toISOString() : undefined,
           };
+          upsertBankToSupabase(profile.id, updatedBank);
+          return updatedBank;
         })
       );
 
@@ -807,21 +858,22 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [notify]
+    [notify, profile.id]
   );
 
   const updateBankBalance = useCallback(
     (institutionId: BankInstitutionId, balance: number) => {
       setBanks((prev) =>
-        prev.map((b) =>
-          b.institutionId === institutionId
-            ? { ...b, balance, connected: true }
-            : b
-        )
+        prev.map((b) => {
+          if (b.institutionId !== institutionId) return b;
+          const updatedBank = { ...b, balance, connected: true };
+          upsertBankToSupabase(profile.id, updatedBank);
+          return updatedBank;
+        })
       );
       notify('Saldo atualizado', 'O saldo da conta foi salvo.');
     },
-    [notify]
+    [notify, profile.id]
   );
 
   const syncConnectedBanks = useCallback(
@@ -922,20 +974,22 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
             if (realTxs.length > 0) {
               setTransactions((prev) => [...realTxs, ...prev]);
+              insertTransactionsToSupabase(profile.id, realTxs);
               totalImportedFromPluggy += realTxs.length;
             }
 
             if (typeof data.totalBalance === 'number') {
               setBanks((prev) =>
-                prev.map((b) =>
-                  b.id === bank.id
-                    ? {
-                        ...b,
-                        balance: data.totalBalance ?? b.balance,
-                        lastSyncAt: new Date().toISOString(),
-                      }
-                    : b
-                )
+                prev.map((b) => {
+                  if (b.id !== bank.id) return b;
+                  const updatedBank = {
+                    ...b,
+                    balance: data.totalBalance ?? b.balance,
+                    lastSyncAt: new Date().toISOString(),
+                  };
+                  upsertBankToSupabase(profile.id, updatedBank);
+                  return updatedBank;
+                })
               );
             }
           }
@@ -968,6 +1022,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       drainQueuedWebhookNotifications,
       notify,
       profile.autoClassify,
+      profile.id,
       rules,
       transactions,
     ]
@@ -1041,6 +1096,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       });
 
       setTransactions((prev) => [...imported, ...prev]);
+      insertTransactionsToSupabase(profile.id, imported);
       const skipped = items.length - uniqueItems.length;
       notify(
         'Extrato importado com sucesso!',
@@ -1050,7 +1106,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       );
       return imported.length;
     },
-    [banks, categories, notify, profile.autoClassify, rules, transactions]
+    [banks, categories, notify, profile.autoClassify, profile.id, rules, transactions]
   );
 
   const deleteClassificationRule = useCallback(

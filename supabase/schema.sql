@@ -43,7 +43,7 @@ create policy "Users can update their own profile"
 
 -- 2. Categories Table
 create table if not exists public.categories (
-  id uuid primary key default uuid_generate_v4(),
+  id text primary key default (uuid_generate_v4())::text,
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
   type text not null check (type in ('expense', 'income', 'both')),
@@ -89,7 +89,7 @@ create policy "Users can manage their own bank accounts"
 
 -- 4. Transactions Table (Completed / "Últimas" & Upcoming / "Seguintes")
 create table if not exists public.transactions (
-  id uuid primary key default uuid_generate_v4(),
+  id text primary key default (uuid_generate_v4())::text,
   user_id uuid not null references auth.users(id) on delete cascade,
   description text not null,
   amount numeric(14, 2) not null check (amount >= 0),
@@ -116,7 +116,7 @@ create policy "Users can manage their own transactions"
 
 -- 5. Learned Classification Rules (Merchant / PIX Memory per User)
 create table if not exists public.classification_rules (
-  id uuid primary key default uuid_generate_v4(),
+  id text primary key default (uuid_generate_v4())::text,
   user_id uuid not null references auth.users(id) on delete cascade,
   keyword text not null,
   category_id text not null,
